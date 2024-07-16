@@ -1,0 +1,64 @@
+name: Build and Release Vaultwarden
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        run: |
+          docker build -t vaultwarden:${{ github.sha }} --build-arg vaultwarden_version=${{ secrets.VAULTWARDEN_VERSION }} -f Dockerfile .
+          echo "Built Docker image vaultwarden:${{ github.sha }}"
+
+      - name: Create container and copy vaultwarden binary
+        run: |
+          CONTAINER_ID=$(docker create vaultwarden:${{ github.sha }})
+          docker cp $CONTAINER_ID:/app/target/release/vaultwarden ./vaultwarden
+          docker rm $CONTAINER_ID
+        shell: bash
+
+      - name: Upload vaultwarden binary
+        uses: actions/upload-artifact@v2
+        with:
+          name: vaultwarden
+          path: ./vaultwarden
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Download vaultwarden binary
+        uses: actions/download-artifact@v2
+        with:
+          name: vaultwarden
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME=${GITHUB_REF/refs\/tags\//}
+          RELEASE_NAME="Release ${TAG_NAME}"
+          gh release create $TAG_NAME ./vaultwarden --title "$RELEASE_NAME" --notes "Release of Vaultwarden version ${TAG_NAME}"
